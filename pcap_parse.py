@@ -11,7 +11,7 @@ import OpenSSL
 
 
 def readpcap(pcap_file):
-    output = os.popen("tshark -nnnr %s -Y 'tcp.flags.syn == 1 or tcp.flags.fin == 1 or tcp.flags.reset == 1 or tls' -T ek"%pcap_file).read().strip()
+    output = os.popen("tshark -nnnr %s -Y 'tcp.flags.syn == 1 or tcp.flags.fin == 1 or tcp.flags.reset == 1 or tls' -T ek 2>&1"%pcap_file).read().strip()
     pcap_list = []
     for i in output.split('\n'):
         if 'layers' in i:
@@ -120,7 +120,10 @@ def check_cert(epoch_time, cert_file):
         expired = False
     else:
         expired = True
-    output = os.popen('openssl verify -CAfile %s -CApath %s %s'%(cert_file, cert_file, cert_file)).read()
+    cmd = 'openssl verify -CAfile %s -CApath ./ %s 2>&1'%(cert_file, cert_file)
+    #print(cmd)
+    #output = os.popen('openssl verify -CAfile ./ -CApath %s %s 2>&1'%(cert_file,  cert_file)).read()
+    output = os.popen(cmd).read()
     if 'OK' in output:
         self_signed = True
     else:
@@ -135,16 +138,26 @@ def check_cert(epoch_time, cert_file):
 
 
 def cert_parse(flow_dic, pkt, role, app_data_time_dic, flow, tls):
-    flow_dic['server_cert_algorithm'] = tls["x509af_x509af_algorithm_id"]
-    flow_dic['server_x509ce_keyusage'] = tls["x509ce_x509ce_KeyUsage"]
-    flow_dic['server_x509ce_keypurposeids'] = tls["x509ce_x509ce_KeyPurposeId"]
-    flow_dic['server_x509sat_countryname'] = tls["x509sat_x509sat_CountryName"]
-    flow_dic['server_x509af_utctime'] = tls["x509af_x509af_utcTime"]
-    flow_dic['server_x509af_serialNumber'] = tls["x509af_x509af_serialNumber"]
-    flow_dic['server_x509af_extension_id'] = tls["x509af_x509af_extension_id"]
-    flow_dic['server_cert_number'] = len(tls["tls_tls_handshake_certificate"])
-    flow_dic['server_certificates_length'] = tls["tls_tls_handshake_certificates_length"]
-    flow_dic['server_policyidentifier'] = tls["x509ce_x509ce_policyIdentifier"]
+    if "x509af_x509af_algorithm_id" in tls:
+        flow_dic['server_cert_algorithm'] = tls["x509af_x509af_algorithm_id"]
+    if "x509ce_x509ce_KeyUsage" in tls:
+        flow_dic['server_x509ce_keyusage'] = tls["x509ce_x509ce_KeyUsage"]
+    if 'x509ce_x509ce_KeyPurposeId' in tls:
+        flow_dic['server_x509ce_keypurposeids'] = tls["x509ce_x509ce_KeyPurposeId"]
+    if "x509sat_x509sat_CountryName" in tls:    
+        flow_dic['server_x509sat_countryname'] = tls["x509sat_x509sat_CountryName"]
+    if "x509af_x509af_utcTime" in tls:
+        flow_dic['server_x509af_utctime'] = tls["x509af_x509af_utcTime"]
+    if "x509af_x509af_serialNumber" in tls:
+        flow_dic['server_x509af_serialNumber'] = tls["x509af_x509af_serialNumber"]
+    if "x509af_x509af_extension_id" in tls:
+        flow_dic['server_x509af_extension_id'] = tls["x509af_x509af_extension_id"]
+    if "tls_tls_handshake_certificate" in tls:
+        flow_dic['server_cert_number'] = len(tls["tls_tls_handshake_certificate"])
+    if "tls_tls_handshake_certificates_length" in tls:
+        flow_dic['server_certificates_length'] = tls["tls_tls_handshake_certificates_length"]
+    if "x509ce_x509ce_policyIdentifier" in tls:
+        flow_dic['server_policyidentifier'] = tls["x509ce_x509ce_policyIdentifier"]
     epoch_time = int(pkt['layers']['frame']["frame_frame_time_epoch"].split('.')[0])
     issuer_list = []
     subject_list = []
@@ -152,7 +165,11 @@ def cert_parse(flow_dic, pkt, role, app_data_time_dic, flow, tls):
     self_signed_list = []
     wellknown_list = []
     #os.popen('rm cert.der cert.crt -f 2>/dev/null')
+    if not isinstance(tls["tls_tls_handshake_certificate"], list):
+        tls["tls_tls_handshake_certificate"] = [tls["tls_tls_handshake_certificate"]]
     for der_hex in tls["tls_tls_handshake_certificate"]:
+        #print(pkt['layers']['frame']["frame_frame_number"])
+        #print(der_hex.replace(':', ''))
         der_file = binascii.unhexlify(der_hex.replace(':', ''))
         with open('cert.der', 'wb') as f:
             f.write(der_file)
@@ -211,22 +228,25 @@ def tls_parse(flow_dic, pkt, role, app_data_time_dic, flow, tls):
                     if "tls_tls_handshake_extensions_ec_point_formats_length" in tls:
                         flow_dic[role + '_elliptical_curve'] = tls["tls_tls_handshake_extensions_ec_point_formats_length"]
                     flow_dic[role + '_hello_length'] = tls["tls_tls_handshake_length"]
-
-                    random_bytes = tls['tls_tls_handshake_random_bytes']
+                    #print(pkt['layers']['frame']["frame_frame_number"])
+                    if "tls_tls_handshake_random_bytes" in tls:
+                        random_bytes = tls['tls_tls_handshake_random_bytes']
+                    elif "tls_tls_handshake_random" in tls:
+                        random_bytes = tls["tls_tls_handshake_random"]
                     first_4_random_time = int('0x' + ''.join(random_bytes.split(":")[:4]), 16)
                     epoch_time = int(pkt['layers']['frame']["frame_frame_time_epoch"].split('.')[0])
                     if first_4_random_time > epoch_time + 86400 or first_4_random_time < epoch_time - 86400:
                         flow_dic[role + '_hello_byte_random'] = True
                     else:
                         flow_dic[role + '_hello_byte_random'] = False
-
-                    random_time = tls["tls_tls_handshake_random_time"].split('.')[0].replace('T', ' ')
-                    timearray = time.strptime(random_time, "%Y-%m-%d %H:%M:%S")
-                    timestamp = int(time.mktime(timearray))
-                    if timestamp > epoch_time + 86400 or timestamp < epoch_time - 86400:
-                        flow_dic[role + '_hello_time_random'] = True
-                    else:
-                        flow_dic[role + '_hello_time_random'] = False                        
+                    if "tls_tls_handshake_random_time" in tls:
+                        random_time = tls["tls_tls_handshake_random_time"].split('.')[0].replace('T', ' ')
+                        timearray = time.strptime(random_time, "%Y-%m-%d %H:%M:%S")
+                        timestamp = int(time.mktime(timearray))
+                        if timestamp > epoch_time + 86400 or timestamp < epoch_time - 86400:
+                            flow_dic[role + '_hello_time_random'] = True
+                        else:
+                            flow_dic[role + '_hello_time_random'] = False                        
 
                 if tls['tls_tls_handshake_type'] == '16':
                     if 'tls_tls_handshake_client_point_len' in tls:
@@ -235,13 +255,20 @@ def tls_parse(flow_dic, pkt, role, app_data_time_dic, flow, tls):
                         flow_dic["tls_tls_handshake_epms_len"] = tls["tls_tls_handshake_epms_len"]
     #ssl handshake
     elif "tls_tls_record_version" in tls:
-        flow_dic[role + '_inner_tls_version'] = tls["tls_tls_handshake_version"]
+        #print(tls.keys())
+        if "tls_tls_handshake_version" in tls:
+            flow_dic[role + '_inner_tls_version'] = tls["tls_tls_handshake_version"]
         if "tls_tls_handshake_cipherspec" in tls:    
             flow_dic[role + '_cipher_suites'] = tls["tls_tls_handshake_cipherspec"]
         if "tls_tls_handshake_cipher_spec_len" in tls:
             flow_dic[role + '_cipher_suites_length'] = tls["tls_tls_handshake_cipher_spec_len"]
     if 'tls_tls_app_data' in tls:
-        flow_dic[role + '_applicationdata_length_list'].append(int(tls["tls_tls_record_length"]))
+        #print(pkt['layers']['frame']["frame_frame_number"])
+        if isinstance(tls['tls_tls_record_length'], list):
+            for i in tls['tls_tls_record_length']:
+                flow_dic[role + '_applicationdata_length_list'].append(int(i))
+        else:
+            flow_dic[role + '_applicationdata_length_list'].append(int(tls["tls_tls_record_length"]))
         curr_time = float(pkt["layers"]['frame']["frame_frame_time_relative"])
         if app_data_time_dic[flow][role] != None:
             flow_dic[role + '_applicationdata_interval_list'].append(curr_time - app_data_time_dic[flow][role])
@@ -259,8 +286,12 @@ def parse_pcap(pcap_file):
         pkt = json.loads(p)
         srcport = pkt['layers']['tcp']['tcp_tcp_srcport']
         dstport = pkt['layers']['tcp']['tcp_tcp_dstport']
-        srcip = pkt['layers']['ip']['ip_ip_src']
-        dstip = pkt['layers']['ip']['ip_ip_dst']
+        if 'ip' in pkt['layers']:
+            srcip = pkt['layers']['ip']['ip_ip_src']
+            dstip = pkt['layers']['ip']['ip_ip_dst']
+        else:
+            srcip = pkt['layers']['ipv6']['ipv6_ipv6_src']
+            dstip = pkt['layers']['ipv6']['ipv6_ipv6_dst']           
         if dstport == '443':
             flow = srcip + ":" + srcport + '_' + dstip + ":" + dstport 
             role = 'client'
@@ -324,7 +355,8 @@ def dic_statstic(flow_dic):
     "server_applicationdata_length_list", 
     "client_applicationdata_length_list",
     "server_applicationdata_interval_list",
-    "client_applicationdata_interval_list"]
+    "client_applicationdata_interval_list",
+    'server_x509af_utctime']
     for flow in flow_dic.keys():
         if len(flow_dic[flow]['client_applicationdata_length_list']) > 1:
             flow_dic[flow]['client_applicationdata_length_max'], flow_dic[flow]['client_applicationdata_length_mini'], flow_dic[flow]['client_applicationdata_length_average'], flow_dic[flow]['client_applicationdata_length_standard_deviation'] = calulation(flow_dic[flow]['client_applicationdata_length_list'])
@@ -338,17 +370,17 @@ def dic_statstic(flow_dic):
         for i in list(flow_dic[flow].keys()):
             if i in flow_dic_remove_list:
                 del flow_dic[flow][i]
-            elif isinstance(flow_dic[flow][i], list):
-                flow_dic[flow][i] = "_".join(flow_dic[flow][i])
+            #elif isinstance(flow_dic[flow][i], list):
+            #    flow_dic[flow][i] = "_".join(flow_dic[flow][i])
 
     return flow_dic
 
-def main():
-    pcap_parse_dict = parse_pcap(sys.argv[1])
+def main(file):
+    pcap_parse_dict = parse_pcap(file)
     pcap_parse_dict = dic_statstic(pcap_parse_dict)
     return pcap_parse_dict
 
 if __name__ == "__main__":
-    pcap_parse_dict = main()
+    pcap_parse_dict = main(sys.argv[1])
     print(json.dumps(pcap_parse_dict))
 
